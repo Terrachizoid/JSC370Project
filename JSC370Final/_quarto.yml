@@ -1,0 +1,25 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Final Project"
+  navbar:
+    left:
+      - text: "Report"
+        href: index.qmd
+    right:
+      - text: "GitHub Repo"
+        href: https://github.com/your-username/your-repo
+      - text: "PDF Report"
+        href: report.pdf
+      - text: "Video"
+        href: https://your-video-link
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    embed-resources: false
