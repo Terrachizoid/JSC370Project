@@ -6,13 +6,12 @@ website:
   title: "Final Project"
   navbar:
     left:
-      - text: "Report"
-        href: index.qmd
+      - text: "PDF Report"
+        href: docs/index.pdf
     right:
       - text: "GitHub Repo"
-        href: https://github.com/your-username/your-repo
-      - text: "PDF Report"
-        href: report.pdf
+        href: https://github.com/Terrachizoid/JSC370Project
+
       - text: "Video"
         href: https://your-video-link
 

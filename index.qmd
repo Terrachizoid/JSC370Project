@@ -7,6 +7,10 @@ format:
     toc: true
     toc-depth: 3
     number-sections: true
+  pdf:
+    toc: true
+    toc-depth: 3
+    number-sections: true
 jupyter: python3
 execute:
   warning: false
@@ -390,10 +394,15 @@ Several predictors contain noticeable high-end outliers, especially GDP per capi
 
 The following interactive figures extend the exploratory analysis using the cleaned country-level dataset developed for the project. They are presented in report style, with each visualization paired with a short caption and interpretation. The goal is not to introduce new modeling results, but to give readers multiple interactive ways to examine the geographic distribution of the data, the relationship between selected predictors and cancer mortality, and the countries that rank highest or lowest on each measure.
 
+::: {.content-visible when-format="pdf"}
+The PDF version shows static versions of the interactive website figures so that the report remains readable in print. The full interactive versions are available on the website.
+:::
+
 ### Interactive Figure 1. Global choropleth map of selected indicators
 
 This figure provides a geographic view of the dataset. The dropdown menu allows the user to switch between cancer mortality and several predictors, including smoking prevalence, alcohol consumption, obesity prevalence, physical inactivity, GDP per capita, and life expectancy. Hover text displays the country name, ISO-3 code, and the selected value. This plot is useful for identifying broad regional structure and for seeing whether countries with high mortality also tend to score highly on the same predictors.
 
+::: {.content-visible when-format="html"}
 ```{python}
 #| echo: false
 import pandas as pd
@@ -488,6 +497,109 @@ fig.update_layout(
 )
 fig.show()
 ```
+:::
+
+::: {.content-visible when-format="pdf"}
+```{python}
+#| echo: false
+import pandas as pd
+import plotly.graph_objects as go
+import pycountry
+def iso3_to_name(code):
+    try:
+        return pycountry.countries.get(alpha_3=code).name
+    except:
+        return code
+
+
+df["country_name"] = df["country"].apply(iso3_to_name)
+iso_col = "country"
+name_col = "country_name"
+
+if name_col not in df.columns:
+    df["country_name"] = df[iso_col]
+    name_col = "country_name"
+
+feature_map = {
+    "Cancer Mortality": "cancer_mortality",
+    "Smoking": "smoking",
+    "Alcohol": "alcohol",
+    "Obesity": "obesity",
+    "Physical Inactivity": "inactivity",
+    "GDP per Capita": "gdp_per_capita",
+    "PM2.5": "pollution_pm25",
+    "Doctors per 10,000": "medical_doctors_per_10000",
+    "Life Expectancy": "life_expectancy"
+}
+feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+feature_items = list(feature_map.items())
+
+traces = []
+for i, (display_name, col) in enumerate(feature_items):
+    traces.append(
+        go.Choropleth(
+            locations=df[iso_col],
+            z=df[col],
+            locationmode="ISO-3",
+            visible=(i == 0),
+            colorbar_title=display_name,
+            colorscale="Viridis",
+            marker_line_color="white",
+            marker_line_width=0.4,
+            customdata=df[[name_col]].values,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "ISO-3: %{location}<br>"
+                f"{display_name}: " + "%{z:.2f}<extra></extra>"
+            )
+        )
+    )
+
+buttons = []
+for i, (display_name, col) in enumerate(feature_items):
+    visible_array = [False] * len(feature_items)
+    visible_array[i] = True
+    buttons.append(
+        dict(
+            label=display_name,
+            method="update",
+            args=[
+                {"visible": visible_array},
+                {"title": f"Global {display_name} by Country"}
+            ]
+        )
+    )
+
+fig = go.Figure(data=traces)
+fig.update_layout(
+    title=f"Global {feature_items[0][0]} by Country",
+    geo=dict(
+        showframe=False,
+        showcoastlines=True,
+        projection_type="equirectangular"
+    ),
+    template="plotly_white",
+    margin=dict(l=0, r=0, t=60, b=0),
+    updatemenus=[
+        dict(
+            buttons=buttons,
+            direction="down",
+            x=0.02,
+            xanchor="left",
+            y=1.05,
+            yanchor="top",
+            showactive=True
+        )
+    ]
+)
+
+import os
+from IPython.display import Image, display
+os.makedirs("figures", exist_ok=True)
+fig.write_image("figures/interactive_figure_1_choropleth.png", width=1200, height=650, scale=2)
+display(Image(filename="figures/interactive_figure_1_choropleth.png"))
+```
+:::
 
 **Caption.** *Interactive choropleth map of cancer mortality and selected country-level predictors.* Use the dropdown menu to switch the displayed variable. Darker shading indicates larger values for the selected measure, and hovering over a country reveals its name, ISO-3 code, and numeric value.
 
@@ -495,6 +607,7 @@ fig.show()
 
 This scatter plot fixes cancer mortality on the y-axis and lets the reader choose a single predictor for the x-axis. That design is intentionally simpler than a two-dropdown version: it avoids synchronization problems and keeps the interpretation focused on the main project question, namely how each candidate predictor relates to cancer mortality. Each point is a country, and hovering reveals the country name, ISO-3 code, and both variable values.
 
+::: {.content-visible when-format="html"}
 ```{python}
 #| echo: false
 import plotly.graph_objects as go
@@ -595,6 +708,115 @@ fig.update_layout(
 )
 fig.show()
 ```
+:::
+
+::: {.content-visible when-format="pdf"}
+```{python}
+#| echo: false
+import plotly.graph_objects as go
+
+iso_col = "country"
+name_col = "country_name"
+y_col = "cancer_mortality"
+y_name = "Cancer Mortality"
+
+if name_col not in df.columns:
+    df["country_name"] = df[iso_col]
+    name_col = "country_name"
+
+x_feature_map = {
+    "Cancer Mortality": "cancer_mortality",
+    "Smoking": "smoking",
+    "Alcohol": "alcohol",
+    "Obesity": "obesity",
+    "Physical Inactivity": "inactivity",
+    "GDP per Capita": "gdp_per_capita",
+    "PM2.5": "pollution_pm25",
+    "Doctors per 10,000": "medical_doctors_per_10000",
+    "Life Expectancy": "life_expectancy"
+}
+
+x_feature_map = {k: v for k, v in x_feature_map.items() if v in df.columns}
+x_names = list(x_feature_map.keys())
+default_x_name = "Smoking" if "Smoking" in x_feature_map else x_names[0]
+
+fig = go.Figure()
+for i, (x_name, x_col) in enumerate(x_feature_map.items()):
+    fig.add_trace(
+        go.Scatter(
+            x=df[x_col],
+            y=df[y_col],
+            mode="markers",
+            visible=(x_name == default_x_name),
+            marker=dict(size=8, opacity=0.75),
+            customdata=df[[name_col, iso_col]].values,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "ISO-3: %{customdata[1]}<br>"
+                f"{x_name}: " + "%{x:.2f}<br>"
+                f"{y_name}: " + "%{y:.2f}<extra></extra>"
+            ),
+            name=x_name
+        )
+    )
+
+buttons = []
+for i, (x_name, x_col) in enumerate(x_feature_map.items()):
+    visible = [False] * len(x_feature_map)
+    visible[i] = True
+    buttons.append(
+        dict(
+            label=x_name,
+            method="update",
+            args=[
+                {"visible": visible},
+                {
+                    "title": f"{y_name} vs {x_name}",
+                    "xaxis.title.text": x_name,
+                    "yaxis.title.text": y_name
+                }
+            ]
+        )
+    )
+
+fig.update_layout(
+    title=f"{y_name} vs {default_x_name}",
+    xaxis_title=default_x_name,
+    yaxis_title=y_name,
+    template="plotly_white",
+    margin=dict(l=60, r=40, t=80, b=60),
+    updatemenus=[
+        dict(
+            buttons=buttons,
+            direction="down",
+            x=0.82,
+            xanchor="left",
+            y=1.14,
+            yanchor="top",
+            showactive=True,
+            active=x_names.index(default_x_name)
+        )
+    ],
+    annotations=[
+        dict(
+            text="X variable:",
+            x=0.82,
+            y=1.20,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            align="left"
+        )
+    ]
+)
+
+import os
+from IPython.display import Image, display
+os.makedirs("figures", exist_ok=True)
+fig.write_image("figures/interactive_figure_2_scatter.png", width=1100, height=650, scale=2)
+display(Image(filename="figures/interactive_figure_2_scatter.png"))
+```
+:::
 
 **Caption.** *Interactive scatter plot of cancer mortality against selected predictors.* The dropdown menu changes the predictor shown on the x-axis while cancer mortality remains fixed on the y-axis. This view makes it easier to compare whether smoking, alcohol consumption, obesity, physical inactivity, GDP per capita, or life expectancy show stronger or weaker country-level associations with mortality.
 
@@ -602,6 +824,7 @@ fig.show()
 
 The third figure is an interactive ranking table. It allows the user to switch between variables and inspect the countries with either the highest or lowest observed values. This complements the map and scatter plot by giving an exact lookup of country names and values rather than only a visual impression.
 
+::: {.content-visible when-format="html"}
 ```{python}
 #| echo: false
 import plotly.graph_objects as go
@@ -688,7 +911,6 @@ default_index = next(
 )
 
 fig.update_layout(
-    title=f"{default_order}: {default_feature}",
     margin=dict(l=20, r=20, t=90, b=20),
     updatemenus=[
         dict(
@@ -706,6 +928,51 @@ fig.update_layout(
 )
 fig.show()
 ```
+:::
+
+::: {.content-visible when-format="pdf"}
+```{python}
+#| echo: false
+import pandas as pd
+
+iso_col = "country"
+name_col = "country_name"
+
+if name_col not in df.columns:
+    df["country_name"] = df[iso_col]
+    name_col = "country_name"
+
+feature_map = {
+    "Cancer Mortality": "cancer_mortality",
+    "Smoking": "smoking",
+    "Alcohol": "alcohol",
+    "Obesity": "obesity",
+    "Physical Inactivity": "inactivity",
+    "GDP per Capita": "gdp_per_capita",
+    "PM2.5": "pollution_pm25",
+    "Doctors per 10,000": "medical_doctors_per_10000",
+    "Life Expectancy": "life_expectancy"
+}
+feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+order_map = {
+    "Top 10 Highest": ("desc", 10),
+    "Bottom 10 Lowest": ("asc", 10)
+}
+
+def ranking_table(feature_name="Cancer Mortality", order_name="Top 10 Highest"):
+    col = feature_map[feature_name]
+    sort_dir, n_rows = order_map[order_name]
+    temp = df[[name_col, iso_col, col]].dropna().copy()
+    temp = temp.sort_values(by=col, ascending=(sort_dir == "asc")).head(n_rows)
+    temp = temp.reset_index(drop=True)
+    temp["Rank"] = range(1, len(temp) + 1)
+    temp = temp[["Rank", name_col, iso_col, col]]
+    temp.columns = ["Rank", "Country", "ISO-3", feature_name]
+    return temp
+
+ranking_table("Cancer Mortality", "Top 10 Highest")
+```
+:::
 
 **Caption.** *Interactive ranking table for country-level indicators.* The dropdown menu switches between variables and ordering rules, allowing the reader to inspect the countries with the ten highest or ten lowest values for the selected measure.
 
@@ -713,6 +980,7 @@ fig.show()
 
 This final figure is not part of the three required HW5 visuals, but it is included as an exploratory extension. It plots cancer mortality against PM2.5 exposure and medical doctor density, then overlays a fitted linear plane. The purpose is not to claim a causal mechanism or to present a final predictive model, but to illustrate that some of the most surprising bivariate findings become easier to discuss when viewed jointly.
 
+::: {.content-visible when-format="html"}
 ```{python}
 #| echo: false
 import plotly.express as px
@@ -779,6 +1047,81 @@ fig.update_layout(
 )
 fig.show()
 ```
+:::
+
+::: {.content-visible when-format="pdf"}
+```{python}
+#| echo: false
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+from sklearn.linear_model import LinearRegression
+
+X = df[["pollution_pm25", "medical_doctors_per_10000"]].values
+y = df["cancer_mortality"].values
+model = LinearRegression()
+model.fit(X, y)
+
+x_range = np.linspace(df["pollution_pm25"].min(), df["pollution_pm25"].max(), 30)
+y_range = np.linspace(df["medical_doctors_per_10000"].min(), df["medical_doctors_per_10000"].max(), 30)
+xx, yy = np.meshgrid(x_range, y_range)
+zz = model.predict(np.c_[xx.ravel(), yy.ravel()]).reshape(xx.shape)
+
+iso_col = "country"
+name_col = "country_name"
+if name_col not in df.columns:
+    df["country_name"] = df[iso_col]
+    name_col = "country_name"
+
+fig = px.scatter_3d(
+    df,
+    x="pollution_pm25",
+    y="medical_doctors_per_10000",
+    z="cancer_mortality",
+    hover_name=name_col,
+    title="Cancer Mortality vs PM2.5 and Medical Doctors",
+    labels={
+        "pollution_pm25": "PM2.5 Exposure",
+        "medical_doctors_per_10000": "Doctors per 10,000",
+        "cancer_mortality": "Cancer Mortality"
+    }
+)
+
+fig.add_trace(
+    go.Surface(
+        x=xx,
+        y=yy,
+        z=zz,
+        opacity=0.45,
+        colorscale="Viridis",
+        name="Fitted Plane",
+        showscale=False
+    )
+)
+
+fig.update_traces(
+    marker=dict(size=4, opacity=0.7),
+    selector=dict(type="scatter3d"),
+    hovertemplate=(
+        "<b>%{hovertext}</b><br>"
+        "PM2.5: %{x:.2f}<br>"
+        "Doctors: %{y:.2f}<br>"
+        "Cancer Mortality: %{z:.2f}<extra></extra>"
+    )
+)
+
+fig.update_layout(
+    template="plotly_white",
+    margin=dict(l=0, r=0, t=60, b=0)
+)
+
+import os
+from IPython.display import Image, display
+os.makedirs("figures", exist_ok=True)
+fig.write_image("figures/exploratory_3d_scatter_plane.png", width=1100, height=750, scale=2)
+display(Image(filename="figures/exploratory_3d_scatter_plane.png"))
+```
+:::
 
 **Caption.** *Exploratory 3D scatter plot of cancer mortality, PM2.5 exposure, and medical doctor density with fitted linear plane.* The fitted plane indicates a positive association between doctor density and recorded cancer mortality, alongside a negative association between PM2.5 exposure and mortality. These patterns are counterintuitive and should not be interpreted causally; they more plausibly reflect confounding by development, healthcare access, life expectancy, and reporting quality.
 
