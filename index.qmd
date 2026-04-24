@@ -31,7 +31,7 @@ The main research question is: **To what extent can country-level lifestyle risk
 
 I hypothesized that smoking, obesity, alcohol consumption, and physical inactivity would be positively associated with cancer mortality. I also expected life expectancy to be related to mortality because it partly reflects population age structure, longevity, and overall health-system development. At the same time, I expected predictive performance to be limited, since cancer mortality is influenced by many overlapping processes that are not fully captured by a small set of aggregate country-level indicators.
 
-## Methods
+## Data and Preprocessing
 
 ### Data sources and study design
 
@@ -274,18 +274,9 @@ summary_table["variable"] = summary_table["variable"].map(label_map)
 summary_table
 ```
 
-### Exploratory and interactive analysis
+## Exploratory Data Analysis
 
 Exploratory data analysis included histograms, scatterplots, correlation summaries, and boxplots to assess variable distributions, inspect bivariate relationships with cancer mortality, and identify skewness or outliers that might affect modeling. Interactive visualizations were also created as a companion website component to support geographic interpretation, country comparison, and exploration of selected predictors.
-
-### Predictive modeling strategy
-
-To evaluate how well the selected country-level indicators predict cancer mortality, three regression models were compared: **linear regression**, **random forest**, and **XGBoost**. The linear model serves as an interpretable baseline, while the two tree-based models allow nonlinear effects and interactions.
-
-Because the country-level dataset is modest in size, model performance was assessed using **5-fold cross-validation** rather than a separate hold-out test set. This choice preserves more data for estimation while still providing an out-of-sample assessment of predictive performance. Performance was summarized using **\(R^2\)**, **RMSE**, and **MAE**. For the linear regression model, strongly right-skewed predictors were log-transformed. For the tree-based models, hyperparameter tuning was conducted with small, targeted searches to keep computation manageable while still exploring the main bias--variance trade-offs.
-
-
-## Results
 
 ### Distribution of variables
 
@@ -390,7 +381,7 @@ Several predictors contain noticeable high-end outliers, especially GDP per capi
 
 
 
-## Interactive visualizations (website component)
+### Interactive visualizations
 
 The following interactive figures extend the exploratory analysis using the cleaned country-level dataset developed for the project. They are presented in report style, with each visualization paired with a short caption and interpretation. The goal is not to introduce new modeling results, but to give readers multiple interactive ways to examine the geographic distribution of the data, the relationship between selected predictors and cancer mortality, and the countries that rank highest or lowest on each measure.
 
@@ -398,7 +389,7 @@ The following interactive figures extend the exploratory analysis using the clea
 The PDF version shows static versions of the interactive website figures so that the report remains readable in print. The full interactive versions are available on the website.
 :::
 
-### Interactive Figure 1. Global choropleth map of selected indicators
+#### Interactive Figure 1. Global choropleth map of selected indicators
 
 This figure provides a geographic view of the dataset. The dropdown menu allows the user to switch between cancer mortality and several predictors, including smoking prevalence, alcohol consumption, obesity prevalence, physical inactivity, GDP per capita, and life expectancy. Hover text displays the country name, ISO-3 code, and the selected value. This plot is useful for identifying broad regional structure and for seeing whether countries with high mortality also tend to score highly on the same predictors.
 
@@ -603,7 +594,7 @@ display(Image(filename="figures/interactive_figure_1_choropleth.png"))
 
 **Caption.** *Interactive choropleth map of cancer mortality and selected country-level predictors.* Use the dropdown menu to switch the displayed variable. Darker shading indicates larger values for the selected measure, and hovering over a country reveals its name, ISO-3 code, and numeric value.
 
-### Interactive Figure 2. Cancer mortality versus selected predictors
+#### Interactive Figure 2. Cancer mortality versus selected predictors
 
 This scatter plot fixes cancer mortality on the y-axis and lets the reader choose a single predictor for the x-axis. That design is intentionally simpler than a two-dropdown version: it avoids synchronization problems and keeps the interpretation focused on the main project question, namely how each candidate predictor relates to cancer mortality. Each point is a country, and hovering reveals the country name, ISO-3 code, and both variable values.
 
@@ -820,7 +811,7 @@ display(Image(filename="figures/interactive_figure_2_scatter.png"))
 
 **Caption.** *Interactive scatter plot of cancer mortality against selected predictors.* The dropdown menu changes the predictor shown on the x-axis while cancer mortality remains fixed on the y-axis. This view makes it easier to compare whether smoking, alcohol consumption, obesity, physical inactivity, GDP per capita, or life expectancy show stronger or weaker country-level associations with mortality.
 
-### Interactive Figure 3. Country rankings for selected indicators
+#### Interactive Figure 3. Country rankings for selected indicators
 
 The third figure is an interactive ranking table. It allows the user to switch between variables and inspect the countries with either the highest or lowest observed values. This complements the map and scatter plot by giving an exact lookup of country names and values rather than only a visual impression.
 
@@ -976,7 +967,7 @@ ranking_table("Cancer Mortality", "Top 10 Highest")
 
 **Caption.** *Interactive ranking table for country-level indicators.* The dropdown menu switches between variables and ordering rules, allowing the reader to inspect the countries with the ten highest or ten lowest values for the selected measure.
 
-### Exploratory figure. 3D scatter plot with fitted plane
+#### Exploratory figure. 3D scatter plot with fitted plane
 
 This final figure is not part of the three required HW5 visuals, but it is included as an exploratory extension. It plots cancer mortality against PM2.5 exposure and medical doctor density, then overlays a fitted linear plane. The purpose is not to claim a causal mechanism or to present a final predictive model, but to illustrate that some of the most surprising bivariate findings become easier to discuss when viewed jointly.
 
@@ -1128,7 +1119,9 @@ display(Image(filename="figures/exploratory_3d_scatter_plane.png"))
 
 
 
-### Predictive modeling
+## Predictive Modeling
+
+### Modeling strategy
 
 To extend the exploratory analysis into the predictive stage of the project, I compared three regression models: a baseline **ordinary least squares linear regression**, a **random forest regressor**, and an **XGBoost regressor**. The same outcome and predictor set were used across models so that performance differences would reflect model flexibility rather than differences in inputs.
 
@@ -1196,7 +1189,7 @@ X_linear = linear_df[
 ]
 ```
 
-#### Baseline models
+### Baseline models
 
 The linear regression model serves as an interpretable baseline, while the initial random forest model provides a constrained nonlinear benchmark with shallow trees and minimum node-size restrictions to reduce overfitting.
 
@@ -1234,7 +1227,7 @@ baseline_table
 
 These baseline results provide a reference point for judging whether more flexible models meaningfully improve prediction or mainly increase variance.
 
-#### Random forest tuning
+### Random forest tuning
 
 Random forest hyperparameters were tuned in two stages. A small **randomized search** was first used to explore a broad but manageable parameter space. A more focused **grid search** was then conducted around the better-performing region suggested by the randomized search. This two-stage strategy is more efficient than a large exhaustive grid while still allowing the main bias--variance trade-offs to be explored.
 
@@ -1332,7 +1325,7 @@ Increasing the number of trees beyond 100 did not improve predictive performance
 
 Instead, hyperparameters controlling tree complexity and feature subsampling (e.g., maximum depth, minimum samples per leaf, and max_features) had a larger impact on generalization performance, likely by reducing correlation between trees and preventing overfitting.
 
-#### XGBoost modeling and tuning
+### XGBoost modeling and tuning
 
 XGBoost was included as a second tree-based model with a different inductive bias. Unlike random forests, which average many independently grown trees, XGBoost builds trees sequentially so that each new tree attempts to correct the errors of the previous ensemble. This can improve performance when the underlying structure is complex, but it also makes the method more prone to overfitting on small or noisy datasets.
 
@@ -1425,7 +1418,7 @@ xgb_best_params_table = pd.DataFrame([xgb_grid_search.best_params_])
 xgb_best_params_table
 ```
 
-#### Final model comparison
+### Final model comparison
 
 The final comparison table summarizes cross-validated performance across the null baseline, linear regression, constrained and tuned random forest models, and default and tuned XGBoost models.
 
@@ -1446,7 +1439,7 @@ comparison_table = comparison_table[[col for col in ["Model", "Train R^2", "CV R
 comparison_table
 ```
 
-### Model Results
+### Model results and interpretation
 
 The predictive performance of all models is summarized in Table X. Overall, none of the models achieved strong predictive accuracy, with cross-validated  **\(R^2\)** values remaining close to zero across all approaches.
 
