@@ -7,7 +7,7 @@ website:
   navbar:
     left:
       - text: "PDF Report"
-        href: docs/index.pdf
+        href: index.pdf
     right:
       - text: "GitHub Repo"
         href: https://github.com/Terrachizoid/JSC370Project
