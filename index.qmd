@@ -1355,7 +1355,7 @@ xgb_default_table = summarize_cv(xgb_default_cv, "XGBoost (default)")
 xgb_default_table
 ```
 
-We are seeing the default XGBoost was overfitting with train accuracy 0.92.
+The default XGBoost model shows clear overfitting: its training \(R^2\) is high, but its cross-validated \(R^2\) remains much lower. This indicates that the model captured patterns specific to the training folds more strongly than patterns that generalize across countries.
 
 
 A focused grid search was used for XGBoost rather than a very large search space. Given the small and noisy dataset, the search emphasized shallower trees, moderate numbers of boosting rounds, subsampling, and stronger regularization.
@@ -1441,11 +1441,11 @@ comparison_table
 
 ### Model results and interpretation
 
-The predictive performance of all models is summarized in Table X. Overall, none of the models achieved strong predictive accuracy, with cross-validated  **\(R^2\)** values remaining close to zero across all approaches.
+The predictive performance of all models is summarized in the final comparison table. Overall, the non-null models performed better than the null baseline, but none achieved strong predictive accuracy. The cross-validated **\(R^2\)** values remained low across all approaches, suggesting that the predictors contain some signal but not enough for highly accurate country-level prediction.
 
-The linear regression model provided a simple baseline and achieved slightly positive but very limited explanatory power. More flexible models, including random forest and XGBoost, did not substantially improve performance. In fact, the default XGBoost model performed worse than the null model, indicating severe overfitting and poor generalization.
+The linear regression model provided a simple baseline and achieved positive but limited explanatory power. The tree-based models generally improved on the null baseline, but the gains were still modest. The strongest warning sign came from the default XGBoost model: although it did not fall below the null baseline in cross-validation, its very high training \(R^2\) compared with its much lower cross-validated \(R^2\) indicates substantial overfitting and weak generalization.
 
-A consistent pattern across models is that increasing model complexity did not lead to meaningful improvements in predictive performance. While tree-based methods are capable of capturing nonlinear relationships, their added flexibility resulted primarily in increased variance rather than improved fit to the underlying signal. This is reflected in the large gap between training and cross-validation performance for more complex configurations.
+A consistent pattern across models is that added flexibility only produced small improvements in predictive performance. Tree-based methods can capture nonlinear relationships and interactions, but in this dataset their extra flexibility also increased the risk of fitting noise. This is especially visible in the larger gaps between training and cross-validation performance for the more flexible configurations.
 
 After hyperparameter tuning, both random forest and XGBoost models showed improved generalization. The tuned models used shallower trees, larger minimum node sizes, and subsampling strategies, which effectively reduced overfitting. This is evident from the reduction in training performance accompanied by modest improvements in cross-validated metrics.
 
@@ -1455,13 +1455,13 @@ Among all models, the tuned random forest achieved the best overall performance,
 
 This analysis constructed a cross-country dataset linking cancer mortality to lifestyle, environmental, socioeconomic, demographic, and healthcare indicators using data from the WHO and World Bank APIs. While exploratory analysis revealed substantial variation across countries, the predictive modeling results indicate that these variables provide only limited explanatory power for cancer mortality.
 
-Across all models, predictive performance remained low, with cross-validated  **\(R^2\)** values close to zero. Even the best-performing model, a tuned random forest, showed only modest improvement over the null model. This suggests that the relationship between the selected predictors and cancer mortality is weak at the country level.
+Across all models, predictive performance remained limited. The non-null models improved over the mean-only null model, and the tuned random forest performed best overall, but the cross-validated **\(R^2\)** values were still low. This suggests that the selected predictors capture some country-level signal, but the relationship between these indicators and cancer mortality remains weak and noisy.
 
-The modeling results also highlight an important bias–variance trade-off. More flexible models such as random forests and XGBoost introduced higher variance without substantially reducing bias, resulting in poorer generalization performance. Hyperparameter tuning improved this by enforcing simpler model structures, which reduced overfitting but did not meaningfully increase predictive accuracy.
+The modeling results also highlight an important bias–variance trade-off. More flexible models such as random forests and XGBoost were able to capture some nonlinear structure, but they also showed larger training-to-validation gaps when the model was too flexible. Hyperparameter tuning helped by enforcing simpler model structures, which reduced overfitting and modestly improved generalization, but it did not turn the problem into a high-accuracy prediction task.
 
 These findings indicate that the main limitation is not the choice of model, but the data and problem formulation itself. Cancer mortality is influenced by complex and long-term processes, including historical exposure, age structure, healthcare systems, screening practices, and reporting differences. Aggregating these effects into a small set of country-level indicators likely obscures important variation and introduces substantial irreducible noise.
 
 Several data limitations further constrain the analysis. The WHO API contains substantial missing data across countries and years, which required restricting the dataset to the most recent available observations. This reduced the effective sample size and removed temporal information. In addition, some key variables were unavailable or inconsistently reported, leading to the use of proxies such as physicians per population for healthcare capacity. Median imputation was used to handle missing values, which simplifies the data structure but may further reduce variability and signal.
 
-Overall, the results suggest that predicting cancer mortality using a small set of aggregated country-level indicators is inherently challenging. The low predictive performance reflects both weak observable signal and high irreducible noise. As a result, this analysis is better interpreted as a descriptive comparison of broad patterns rather than a precise predictive or causal model.
+Overall, the results suggest that predicting cancer mortality using a small set of aggregated country-level indicators is inherently challenging. The models show that there is some observable signal, but the signal is weak relative to the noise introduced by aggregation, missing temporal information, and unmeasured factors. As a result, this analysis is better interpreted as a descriptive comparison of broad patterns rather than a precise predictive or causal model.
 
