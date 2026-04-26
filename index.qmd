@@ -35,13 +35,13 @@ I hypothesized that smoking, obesity, alcohol consumption, and physical inactivi
 
 ### Data sources and study design
 
-Data were collected from two public APIs. The **WHO Global Health Observatory API** was used to retrieve the outcome variable, age-standardized cancer mortality, along with several candidate predictors: smoking prevalence, obesity prevalence, alcohol consumption, prevalence of insufficient physical activity, PM2.5 exposure, and medical doctors per 10,000 population. The **World Bank API** was used to obtain GDP per capita and life expectancy at birth. These variables were selected to represent behavioral risk factors, environmental exposure, socioeconomic development, demographic structure, and healthcare capacity.
+Data were collected from two public APIs. The **WHO Global Health Observatory API** was used to retrieve the original outcome variable, age-standardized all-cancer mortality, five cancer-type-specific mortality outcomes, and several candidate predictors: smoking prevalence, obesity prevalence, alcohol consumption, prevalence of insufficient physical activity, PM2.5 exposure, medical doctors per 10,000 population, cervical cancer screening among women aged 30--49, and chronic hepatitis B prevalence. The **World Bank API** was used to obtain GDP per capita, life expectancy at birth, and urban population share. These variables were selected to represent behavioral risk factors, environmental exposure, socioeconomic development, demographic structure, healthcare capacity, screening behavior, infection-related risk, and urbanization context.
 
-Because the temporal coverage of the indicators was inconsistent across countries and variables, the analysis was designed as a **cross-sectional country-level study** rather than a panel analysis. For each variable, observations were restricted to the 2014--2023 period, and the most recent available value for each country was retained. The resulting country-level records were then merged into a single analytic dataset.
+Because the temporal coverage of the indicators was inconsistent across countries and variables, the analysis was designed as a **cross-sectional country-level study** rather than a panel analysis. For the main all-cancer outcome and predictor variables, observations were restricted to the 2014--2023 period and the most recent available value for each country was retained. For the five cancer-type-specific mortality outcomes, the WHO API only provided older observations for many countries, so the most recent available value was retained without applying the 2014--2023 filter. These cancer-type models are therefore treated as exploratory cross-country association models rather than causal or forward-looking prediction models.
 
 ### Data acquisition and preprocessing
 
-The code below imports the required packages and defines helper functions used to download, filter, and standardize the indicators from the WHO and World Bank APIs.
+The code below imports the required packages, defines an indicator registry, and defines helper functions used to download, filter, and standardize the indicators from the WHO and World Bank APIs.
 
 ```{python}
 #| echo: false
@@ -51,6 +51,7 @@ import requests
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
+import math
 
 warnings.filterwarnings("ignore")
 pd.set_option("display.max_colwidth", None)
@@ -58,6 +59,15 @@ pd.set_option("display.max_colwidth", None)
 
 label_map = {
     "cancer_mortality": "Cancer mortality",
+
+    # Cancer-type-specific mortality outcomes
+    "breast_cancer_mortality": "Breast cancer mortality",
+    "mouth_oropharynx_cancer_mortality": "Mouth/oropharynx cancer mortality",
+    "oesophagus_cancer_mortality": "Oesophagus cancer mortality",
+    "colorectal_cancer_mortality": "Colon and rectum cancer mortality",
+    "liver_cancer_mortality": "Liver cancer mortality",
+
+    # Candidate predictors
     "smoking": "Smoking prevalence (%)",
     "obesity": "Obesity prevalence (%)",
     "alcohol": "Alcohol consumption",
@@ -66,183 +76,383 @@ label_map = {
     "pollution_pm25": "PM2.5 exposure",
     "medical_doctors_per_10000": "Medical doctors (per 10,000)",
     "life_expectancy": "Life expectancy at birth (years)",
+    "cervical_screening_rate": "Cervical screening rate (%)",
+    "hepatitis_b_prevalence": "Chronic hepatitis B prevalence (%)",
+    "urban_population_pct": "Urban population (%)",
 }
 
-#some helper function for data acquisition and preprocessing
+# Overall outcome used by the original modeling section.
+# The modeling section later still uses its original feature_cols list,
+# so these data additions can be checked first without changing model logic.
+outcome_var = "cancer_mortality"
+
+# Additional cancer-type-specific outcomes for EDA and future modeling extension.
+cancer_type_target_vars = [
+    "breast_cancer_mortality",
+    "mouth_oropharynx_cancer_mortality",
+    "oesophagus_cancer_mortality",
+    "colorectal_cancer_mortality",
+    "liver_cancer_mortality",
+]
+
+# Candidate predictors used in the data/EDA pipeline.
+feature_vars = [
+    "smoking",
+    "alcohol",
+    "obesity",
+    "inactivity",
+    "gdp_per_capita",
+    "life_expectancy",
+    "pollution_pm25",
+    "medical_doctors_per_10000",
+    "cervical_screening_rate",
+    "hepatitis_b_prevalence",
+    "urban_population_pct",
+]
+
+analysis_vars = [outcome_var] + cancer_type_target_vars + feature_vars
+
+who_indicator_specs = {
+    "cancer_mortality": {
+        "code": "SA_0000001807",
+        "description": "Cancer, age-standardized death rates (15+), per 100,000 population",
+    },
+    "smoking": {
+        "code": "M_Est_tob_curr",
+        "description": "Estimated current tobacco use prevalence",
+    },
+    "obesity": {
+        "code": "NCD_BMI_30A",
+        "description": "Adult obesity prevalence (BMI >= 30)",
+    },
+    "alcohol": {
+        "code": "SA_0000001822",
+        "description": "Alcohol consumption indicator",
+    },
+    "inactivity": {
+        "code": "NCD_PAA",
+        "description": "Insufficient physical activity prevalence",
+    },
+    "pollution_pm25": {
+        "code": "SDGPM25",
+        "description": "PM2.5 exposure indicator",
+    },
+    "medical_doctors_per_10000": {
+        "code": "HWF_0001",
+        "description": "Medical doctors per 10,000 population",
+    },
+    "cervical_screening_rate": {
+        "code": "NCD_CXCA_SCREENED_WITHIN_TIMEPERIOD",
+        "description": "Prevalence of cervical cancer screening among women aged 30--49 years (%)",
+    },
+    "hepatitis_b_prevalence": {
+        "code": "HEPATITIS_HBV_PREVALENCE_PER100",
+        "description": "Prevalence of chronic hepatitis B in the general population (%)",
+    },
+}
+
+cancer_type_target_specs = {
+    "breast_cancer_mortality": {
+        "code": "SA_0000001438",
+        "description": "Age-standardized death rates, breast cancer, per 100,000",
+    },
+    "mouth_oropharynx_cancer_mortality": {
+        "code": "SA_0000001448",
+        "description": "Age-standardized death rates, mouth and oropharynx cancer, per 100,000",
+    },
+    "oesophagus_cancer_mortality": {
+        "code": "SA_0000001449",
+        "description": "Age-standardized death rates, oesophagus cancer, per 100,000",
+    },
+    "colorectal_cancer_mortality": {
+        "code": "SA_0000001439",
+        "description": "Age-standardized death rates, colon and rectum cancers, per 100,000",
+    },
+    "liver_cancer_mortality": {
+        "code": "SA_0000001445",
+        "description": "Age-standardized death rates, liver cancer, per 100,000",
+    },
+}
+
+worldbank_indicator_specs = {
+    "gdp_per_capita": {
+        "code": "NY.GDP.PCAP.CD",
+        "description": "GDP per capita (current US$)",
+    },
+    "life_expectancy": {
+        "code": "SP.DYN.LE00.IN",
+        "description": "Life expectancy at birth (years)",
+    },
+    "urban_population_pct": {
+        "code": "SP.URB.TOTL.IN.ZS",
+        "description": "Urban population (% of total population)",
+    },
+}
+
+
+# Helper functions for data acquisition and preprocessing
 def get_indicator(indicator_code, column_name):
     """Download one WHO indicator and standardize the key columns."""
     url = f"https://ghoapi.azureedge.net/api/{indicator_code}"
     response = requests.get(url)
+    response.raise_for_status()
     data = response.json()
 
+    if "value" not in data or len(data["value"]) == 0:
+        return pd.DataFrame(columns=["country", "year", column_name])
+
     df = pd.json_normalize(data["value"])
-    df = df[df["SpatialDimType"] == "COUNTRY"]
-    df = df[["SpatialDim", "TimeDim", "NumericValue"]]
+
+    if "SpatialDimType" in df.columns:
+        df = df[df["SpatialDimType"] == "COUNTRY"]
+
+    needed_cols = ["SpatialDim", "TimeDim", "NumericValue"]
+    missing_cols = [col for col in needed_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"{indicator_code} missing columns: {missing_cols}")
+
+    df = df[needed_cols].copy()
     df.columns = ["country", "year", column_name]
+    df[column_name] = pd.to_numeric(df[column_name], errors="coerce")
     return df
 
 
+def get_worldbank_indicator(indicator_code, column_name):
+    """Download one World Bank indicator and standardize the key columns."""
+    url = (
+        "https://api.worldbank.org/v2/country/all/indicator/"
+        f"{indicator_code}?format=json&per_page=20000"
+    )
+    response = requests.get(url)
+    response.raise_for_status()
+    raw = response.json()
+
+    if len(raw) < 2 or raw[1] is None:
+        return pd.DataFrame(columns=["country", "year", column_name])
+
+    df = pd.DataFrame(raw[1])
+
+    needed_cols = ["countryiso3code", "date", "value"]
+    missing_cols = [col for col in needed_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"{indicator_code} missing columns: {missing_cols}")
+
+    df = df[needed_cols].copy()
+    df.columns = ["country", "year", column_name]
+    df = df[df["country"].notna()]
+    df = df[df["country"] != ""]
+    df[column_name] = pd.to_numeric(df[column_name], errors="coerce")
+    return df
+
+
+
 def filter_years(df, years=range(2014, 2024)):
+    """Restrict data to the 2014--2023 study window."""
     df = df.copy()
     df["year"] = pd.to_numeric(df["year"], errors="coerce")
     return df[df["year"].isin(list(years))]
 
 
 def latest_by_country(df):
+    """Keep the most recent available observation for each country."""
+    df = df.copy()
+
+    if df.empty:
+        value_cols = [col for col in df.columns if col not in ["country", "year"]]
+        return pd.DataFrame(columns=["country"] + value_cols)
+
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["country", "year"])
+    df = df.sort_values(["country", "year"])
+
     return (
-        df.sort_values("year")
-          .drop_duplicates("country", keep="last")
+        df.groupby("country", as_index=False)
+          .tail(1)
           .drop(columns="year")
+          .reset_index(drop=True)
     )
+
+
+def make_feature_map(data, include_outcome=True, include_cancer_targets=None):
+    """Create a display-name-to-column map from variables present in a dataframe.
+
+    By default, map/table dropdowns include the overall cancer outcome and the
+    cancer-type-specific outcomes, while predictor-only dropdowns keep only
+    candidate predictors.
+    """
+    if include_cancer_targets is None:
+        include_cancer_targets = include_outcome
+
+    ordered_vars = []
+    if include_outcome:
+        ordered_vars.append(outcome_var)
+    if include_cancer_targets:
+        ordered_vars.extend(cancer_type_target_vars)
+    ordered_vars.extend(feature_vars)
+
+    return {
+        label_map.get(var, var): var
+        for var in ordered_vars
+        if var in data.columns
+    }
+
+
+def make_grid(n_items, ncols=3, height_per_row=3):
+    """Create a subplot grid large enough for a dynamic number of variables."""
+    nrows = math.ceil(n_items / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, height_per_row * nrows))
+    axes = np.array(axes).reshape(-1)
+    return fig, axes
 ```
 
 Table 1 summarizes the indicators included in the final analytic dataset.
 
 ```{python}
 #| echo: false
-indicator_table = pd.DataFrame(
-    {
-        "variable": [
-            "cancer_mortality",
-            "smoking",
-            "obesity",
-            "alcohol",
-            "inactivity",
-            "gdp_per_capita",
-            "pollution_pm25",
-            "medical_doctors_per_10000",
-            "life_expectancy",
-        ],
-        "source": [
-            "WHO",
-            "WHO",
-            "WHO",
-            "WHO",
-            "WHO",
-            "World Bank",
-            "WHO",
-            "WHO",
-            "World Bank",
-        ],
-        "indicator_code": [
-            "SA_0000001807",
-            "M_Est_tob_curr",
-            "NCD_BMI_30A",
-            "SA_0000001822",
-            "NCD_PAA",
-            "NY.GDP.PCAP.CD",
-            "SDGPM25",
-            "HWF_0001",
-            "SP.DYN.LE00.IN",
-        ],
-        "description": [
-            "Age-standardized cancer mortality rate per 100,000 population",
-            "Estimated current tobacco use prevalence",
-            "Adult obesity prevalence (BMI >= 30)",
-            "Alcohol consumption indicator",
-            "Insufficient physical activity prevalence",
-            "GDP per capita (current US$)",
-            "PM2.5 exposure indicator",
-            "Medical doctors per 10,000 population",
-            "Life expectancy at birth (years)",
-        ],
-    }
-)
+indicator_rows = []
+
+for variable, spec in who_indicator_specs.items():
+    indicator_rows.append(
+        {
+            "variable": variable,
+            "source": "WHO",
+            "indicator_code": spec["code"],
+            "description": spec["description"],
+        }
+    )
+
+for variable, spec in cancer_type_target_specs.items():
+    indicator_rows.append(
+        {
+            "variable": variable,
+            "source": "WHO",
+            "indicator_code": spec["code"],
+            "description": spec["description"],
+        }
+    )
+
+for variable, spec in worldbank_indicator_specs.items():
+    indicator_rows.append(
+        {
+            "variable": variable,
+            "source": "World Bank",
+            "indicator_code": spec["code"],
+            "description": spec["description"],
+        }
+    )
+
+indicator_table = pd.DataFrame(indicator_rows)
 
 indicator_table
 ```
 
 ### Building the country-level dataset
 
-The selected indicators were downloaded and restricted to the 2014--2023 period. Because year coverage differs across indicators, the most recent available observation for each country in the selected window was retained.
+The selected all-cancer outcome and predictor indicators were downloaded and restricted to the 2014--2023 period. Because year coverage differs across indicators, the most recent available observation for each country in the selected window was retained. The five cancer-type-specific mortality outcomes were downloaded separately and kept at their most recent available year because restricting them to 2014--2023 removes nearly all observations.
 
 ```{python}
 #| echo: false
-obesity_df = filter_years(get_indicator("NCD_BMI_30A", "obesity"))
-smoking_df = filter_years(get_indicator("M_Est_tob_curr", "smoking"))
-alcohol_df = filter_years(get_indicator("SA_0000001822", "alcohol"))
-inactivity_df = filter_years(get_indicator("NCD_PAA", "inactivity"))
-cancer_df = filter_years(get_indicator("SA_0000001807", "cancer_mortality"))
-doctor_df = filter_years(get_indicator("HWF_0001", "medical_doctors_per_10000"))
-pm_df = filter_years(get_indicator("SDGPM25", "pollution_pm25"))
+raw_dfs = {}
 
-url = "https://api.worldbank.org/v2/country/all/indicator/NY.GDP.PCAP.CD?format=json&per_page=20000"
-gdp_raw = requests.get(url).json()[1]
-gdp_df = pd.DataFrame(gdp_raw)[["countryiso3code", "date", "value"]]
-gdp_df.columns = ["country", "year", "gdp_per_capita"]
-gdp_df = filter_years(gdp_df)
+for variable, spec in who_indicator_specs.items():
+    raw_dfs[variable] = filter_years(
+        get_indicator(spec["code"], variable)
+    )
 
-life_url = "https://api.worldbank.org/v2/country/all/indicator/SP.DYN.LE00.IN?format=json&per_page=20000"
-life_raw = requests.get(life_url).json()[1]
-life_df = pd.DataFrame(life_raw)[["countryiso3code", "date", "value"]]
-life_df.columns = ["country", "year", "life_expectancy"]
-life_df = filter_years(life_df)
+for variable, spec in cancer_type_target_specs.items():
+    # Cancer-type-specific WHO mortality indicators are mostly older than
+    # the 2014--2023 predictor window. Keep latest available values rather
+    # than filtering them out completely.
+    raw_dfs[variable] = get_indicator(spec["code"], variable)
+
+for variable, spec in worldbank_indicator_specs.items():
+    raw_dfs[variable] = filter_years(
+        get_worldbank_indicator(spec["code"], variable)
+    )
 ```
 
 This produces a cross-sectional dataset rather than a sparse country-year panel.
 
 ```{python}
 #| echo: false
-obesity_latest = latest_by_country(obesity_df)
-smoking_latest = latest_by_country(smoking_df)
-alcohol_latest = latest_by_country(alcohol_df)
-inactivity_latest = latest_by_country(inactivity_df)
-gdp_latest = latest_by_country(gdp_df)
-pm_latest = latest_by_country(pm_df)
-doctor_latest = latest_by_country(doctor_df)
-life_latest = latest_by_country(life_df)
-cancer_latest = latest_by_country(cancer_df)
+latest_dfs = {
+    variable: latest_by_country(raw_df)
+    for variable, raw_df in raw_dfs.items()
+}
 
 coverage_table = pd.DataFrame(
     {
-        "variable": [
-            "cancer_mortality",
-            "smoking",
-            "alcohol",
-            "obesity",
-            "inactivity",
-            "gdp_per_capita",
-            "pollution_pm25",
-            "medical_doctors_per_10000",
-            "life_expectancy",
-        ],
-        "countries_available": [
-            len(cancer_latest),
-            len(smoking_latest),
-            len(alcohol_latest),
-            len(obesity_latest),
-            len(inactivity_latest),
-            len(gdp_latest),
-            len(pm_latest),
-            len(doctor_latest),
-            len(life_latest),
-        ],
+        "variable": list(latest_dfs.keys()),
+        "countries_available": [len(latest_dfs[var]) for var in latest_dfs.keys()],
     }
 )
+
+coverage_table["label"] = coverage_table["variable"].map(label_map)
 
 coverage_table
 ```
 
-Cancer mortality was used as the base table because it is the outcome of interest. Predictor tables were then merged by country.
+The table below records the year range of the five cancer-type-specific mortality outcomes. This is included because these outcomes are not temporally aligned with the 2014--2023 predictor window and should be interpreted as exploratory country-level comparisons rather than causal prediction targets.
 
 ```{python}
 #| echo: false
-df = (
-    cancer_latest.copy()
-    .merge(smoking_latest, on="country", how="left")
-    .merge(alcohol_latest, on="country", how="left")
-    .merge(obesity_latest, on="country", how="left")
-    .merge(inactivity_latest, on="country", how="left")
-    .merge(gdp_latest, on="country", how="left")
-    .merge(life_latest, on="country", how="left")
-    .merge(pm_latest, on="country", how="left")
-    .merge(doctor_latest, on="country", how="left")
-)
+target_year_check = []
+
+for variable in cancer_type_target_vars:
+    temp = raw_dfs[variable].copy()
+    temp["year"] = pd.to_numeric(temp["year"], errors="coerce")
+    target_year_check.append(
+        {
+            "variable": variable,
+            "label": label_map.get(variable, variable),
+            "min_year": temp["year"].min(),
+            "median_year": temp["year"].median(),
+            "max_year": temp["year"].max(),
+            "countries_available": temp["country"].nunique(),
+        }
+    )
+
+target_year_check = pd.DataFrame(target_year_check)
+target_year_check
+```
+
+Overall cancer mortality was used as the base table because it is the original outcome of interest. Cancer-type-specific mortality outcomes and predictor tables were then merged by country.
+
+```{python}
+#| echo: false
+df = latest_dfs[outcome_var].copy()
+
+for variable in cancer_type_target_vars + feature_vars:
+    if variable in latest_dfs:
+        df = df.merge(latest_dfs[variable], on="country", how="left")
 
 missing_before = df.isna().sum().reset_index()
 missing_before.columns = ["variable", "missing_before_imputation"]
+
 missing_before
 ```
+
+The table below checks raw availability for the newly added predictor variables and cancer-type-specific mortality outcomes before median imputation. This helps separate real coverage from values later filled during preprocessing.
+
+```{python}
+#| echo: false
+added_check_cols = [
+    "cervical_screening_rate",
+    "hepatitis_b_prevalence",
+    "urban_population_pct",
+] + cancer_type_target_vars
+
+added_variable_check = (
+    df[[col for col in added_check_cols if col in df.columns]]
+      .agg(["count", "min", "median", "max"])
+      .T
+      .round(2)
+)
+
+added_variable_check
+```
+
+These added variables support a later cancer-type-specific modeling extension. The clean WHO mortality outcomes available from the current API search are breast cancer, mouth/oropharynx cancer, oesophagus cancer, colon and rectum cancer, and liver cancer. UV radiation and latitude were removed from the analytic dataset because the corresponding skin cancer mortality outcome was not available in this WHO indicator set.
 
 ### Missing data and analytic variables
 
@@ -262,14 +472,15 @@ The final analytic dataset contains one row per country. Table 2 reports summary
 ```{python}
 #| echo: false
 summary_table = (
-    df.drop(columns=["country"])
+    df.drop(columns=["country"], errors="ignore")
+      .select_dtypes(include="number")
       .agg(["mean", "median", "std", "min", "max"])
       .T
       .round(2)
       .reset_index()
       .rename(columns={"index": "variable"})
 )
-summary_table["variable"] = summary_table["variable"].map(label_map)
+summary_table["variable"] = summary_table["variable"].map(label_map).fillna(summary_table["variable"])
 
 summary_table
 ```
@@ -284,19 +495,19 @@ Figure 1 shows the distributions of the numeric variables in the cleaned dataset
 
 ```{python}
 #| echo: false
-#| fig-cap: "Figure 1. Distributions of cancer mortality and predictor variables across countries. GDP per capita is especially right-skewed, while several other variables also show noticeable cross-country heterogeneity."
-numeric_df = df.drop(columns=["country"])
+#| fig-cap: "Figure 1. Distributions of cancer mortality and predictor variables across countries. Several variables show skewness and noticeable cross-country heterogeneity, motivating transformations and careful modeling choices."
+numeric_df = df.drop(columns=["country"], errors="ignore").select_dtypes(include="number")
+numeric_cols = numeric_df.columns.tolist()
 
-fig, axes = plt.subplots(3, 3, figsize=(12, 9))
-axes = axes.flatten()
+fig, axes = make_grid(len(numeric_cols), ncols=3, height_per_row=3)
 
-for i, col in enumerate(numeric_df.columns):
-    axes[i].hist(numeric_df[col], bins=20, edgecolor="black")
-    axes[i].set_title(label_map[col])
-    axes[i].set_xlabel(label_map[col])
+for i, col in enumerate(numeric_cols):
+    axes[i].hist(numeric_df[col].dropna(), bins=20, edgecolor="black")
+    axes[i].set_title(label_map.get(col, col))
+    axes[i].set_xlabel(label_map.get(col, col))
     axes[i].set_ylabel("Count")
 
-for j in range(len(numeric_df.columns), len(axes)):
+for j in range(len(numeric_cols), len(axes)):
     axes[j].axis("off")
 
 plt.tight_layout()
@@ -313,16 +524,18 @@ Figure 2 shows scatterplots of cancer mortality against the main predictors.
 #| echo: false
 #| fig-cap: "Figure 2. Scatterplots of cancer mortality against selected predictors. Most relationships appear weak to moderate and are accompanied by substantial variability, suggesting that no single variable explains country-level cancer mortality particularly well on its own."
 target = "cancer_mortality"
-predictors = [col for col in df.columns if col not in ["country", target]]
+predictors = [
+    col for col in numeric_df.columns
+    if col != target
+]
 
-fig, axes = plt.subplots(3, 3, figsize=(13, 10))
-axes = axes.flatten()
+fig, axes = make_grid(len(predictors), ncols=3, height_per_row=3.3)
 
 for i, col in enumerate(predictors):
     axes[i].scatter(df[col], df[target], alpha=0.7)
-    axes[i].set_title(f"{label_map[col]} vs {label_map[target]}")
-    axes[i].set_xlabel(label_map[col])
-    axes[i].set_ylabel(label_map[target])
+    axes[i].set_title(f"{label_map.get(col, col)} vs {label_map.get(target, target)}")
+    axes[i].set_xlabel(label_map.get(col, col))
+    axes[i].set_ylabel(label_map.get(target, target))
 
 for j in range(len(predictors), len(axes)):
     axes[j].axis("off")
@@ -339,12 +552,13 @@ Figure 3 presents the correlation matrix for the numeric variables.
 
 ```{python}
 #| echo: false
-#| fig-cap: "Figure 3. Correlation matrix of the numeric variables. Most correlations with cancer mortality are modest, while some stronger associations appear among the predictors themselves, such as GDP per capita and physician density."
+#| fig-cap: "Figure 3. Correlation matrix of the numeric variables. Most correlations with cancer mortality are modest, while some stronger associations appear among predictors themselves."
 corr = numeric_df.corr()
 corr.index = [label_map.get(x, x) for x in corr.index]
 corr.columns = [label_map.get(x, x) for x in corr.columns]
 
-plt.figure(figsize=(9, 7))
+size = max(9, 0.7 * len(corr.columns))
+plt.figure(figsize=(size, size * 0.85))
 sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f")
 plt.title("Correlation Matrix")
 plt.tight_layout()
@@ -361,16 +575,15 @@ Figure 4 shows boxplots for the numeric variables.
 
 ```{python}
 #| echo: false
-#| fig-cap: "Figure 4. Boxplots for cancer mortality and predictor variables. Several variables, especially GDP per capita and physician density, contain high-end outliers, which may motivate transformations or robust modeling choices in the final project."
-fig, axes = plt.subplots(3, 3, figsize=(12, 9))
-axes = axes.flatten()
+#| fig-cap: "Figure 4. Boxplots for cancer mortality and predictor variables. Several variables contain high-end outliers, which may motivate transformations or robust modeling choices."
+fig, axes = make_grid(len(numeric_cols), ncols=3, height_per_row=3)
 
-for i, col in enumerate(numeric_df.columns):
+for i, col in enumerate(numeric_cols):
     axes[i].boxplot(numeric_df[col].dropna(), vert=True)
-    axes[i].set_title(label_map[col])
-    axes[i].set_ylabel(label_map[col])
+    axes[i].set_title(label_map.get(col, col))
+    axes[i].set_ylabel(label_map.get(col, col))
 
-for j in range(len(numeric_df.columns), len(axes)):
+for j in range(len(numeric_cols), len(axes)):
     axes[j].axis("off")
 
 plt.tight_layout()
@@ -391,7 +604,7 @@ The PDF version shows static versions of the interactive website figures so that
 
 #### Interactive Figure 1. Global choropleth map of selected indicators
 
-This figure provides a geographic view of the dataset. The dropdown menu allows the user to switch between cancer mortality and several predictors, including smoking prevalence, alcohol consumption, obesity prevalence, physical inactivity, GDP per capita, and life expectancy. Hover text displays the country name, ISO-3 code, and the selected value. This plot is useful for identifying broad regional structure and for seeing whether countries with high mortality also tend to score highly on the same predictors.
+This figure provides a geographic view of the dataset. The dropdown menu allows the user to switch between all-cancer mortality, cancer-type-specific mortality outcomes, and several predictors, including smoking prevalence, alcohol consumption, obesity prevalence, physical inactivity, GDP per capita, life expectancy, cervical screening, hepatitis B prevalence, and urban population share. Hover text displays the country name, ISO-3 code, and the selected value. This plot is useful for identifying broad regional structure and for comparing both overall mortality and cancer-type-specific mortality patterns across countries.
 
 ::: {.content-visible when-format="html"}
 ```{python}
@@ -399,9 +612,11 @@ This figure provides a geographic view of the dataset. The dropdown menu allows 
 import pandas as pd
 import plotly.graph_objects as go
 import pycountry
+
 def iso3_to_name(code):
     try:
-        return pycountry.countries.get(alpha_3=code).name
+        country = pycountry.countries.get(alpha_3=code)
+        return country.name if country is not None else code
     except:
         return code
 
@@ -414,18 +629,7 @@ if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+feature_map = make_feature_map(df, include_outcome=True)
 feature_items = list(feature_map.items())
 
 traces = []
@@ -496,9 +700,11 @@ fig.show()
 import pandas as pd
 import plotly.graph_objects as go
 import pycountry
+
 def iso3_to_name(code):
     try:
-        return pycountry.countries.get(alpha_3=code).name
+        country = pycountry.countries.get(alpha_3=code)
+        return country.name if country is not None else code
     except:
         return code
 
@@ -511,18 +717,7 @@ if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+feature_map = make_feature_map(df, include_outcome=True)
 feature_items = list(feature_map.items())
 
 traces = []
@@ -606,27 +801,15 @@ import plotly.graph_objects as go
 iso_col = "country"
 name_col = "country_name"
 y_col = "cancer_mortality"
-y_name = "Cancer Mortality"
+y_name = label_map.get(y_col, "Cancer Mortality")
 
 if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-x_feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-
-x_feature_map = {k: v for k, v in x_feature_map.items() if v in df.columns}
+x_feature_map = make_feature_map(df, include_outcome=False)
 x_names = list(x_feature_map.keys())
-default_x_name = "Smoking" if "Smoking" in x_feature_map else x_names[0]
+default_x_name = "Smoking prevalence (%)" if "Smoking prevalence (%)" in x_feature_map else x_names[0]
 
 fig = go.Figure()
 for i, (x_name, x_col) in enumerate(x_feature_map.items()):
@@ -709,27 +892,15 @@ import plotly.graph_objects as go
 iso_col = "country"
 name_col = "country_name"
 y_col = "cancer_mortality"
-y_name = "Cancer Mortality"
+y_name = label_map.get(y_col, "Cancer Mortality")
 
 if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-x_feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-
-x_feature_map = {k: v for k, v in x_feature_map.items() if v in df.columns}
+x_feature_map = make_feature_map(df, include_outcome=False)
 x_names = list(x_feature_map.keys())
-default_x_name = "Smoking" if "Smoking" in x_feature_map else x_names[0]
+default_x_name = "Smoking prevalence (%)" if "Smoking prevalence (%)" in x_feature_map else x_names[0]
 
 fig = go.Figure()
 for i, (x_name, x_col) in enumerate(x_feature_map.items()):
@@ -809,7 +980,7 @@ display(Image(filename="figures/interactive_figure_2_scatter.png"))
 ```
 :::
 
-**Caption.** *Interactive scatter plot of cancer mortality against selected predictors.* The dropdown menu changes the predictor shown on the x-axis while cancer mortality remains fixed on the y-axis. This view makes it easier to compare whether smoking, alcohol consumption, obesity, physical inactivity, GDP per capita, or life expectancy show stronger or weaker country-level associations with mortality.
+**Caption.** *Interactive scatter plot of cancer mortality against selected predictors.* The dropdown menu changes the predictor shown on the x-axis while cancer mortality remains fixed on the y-axis. This view makes it easier to compare whether smoking, alcohol consumption, obesity, physical inactivity, GDP per capita, life expectancy, cervical screening, hepatitis B prevalence, or urban population share show stronger or weaker country-level associations with mortality.
 
 #### Interactive Figure 3. Country rankings for selected indicators
 
@@ -827,18 +998,7 @@ if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+feature_map = make_feature_map(df, include_outcome=True)
 order_map = {
     "Top 10 Highest": ("desc", 10),
     "Bottom 10 Lowest": ("asc", 10)
@@ -849,7 +1009,7 @@ for feature_name, col in feature_map.items():
     for order_name, (sort_dir, n_rows) in order_map.items():
         options.append((feature_name, col, order_name, sort_dir, n_rows))
 
-default_feature = "Cancer Mortality" if "Cancer Mortality" in feature_map else list(feature_map.keys())[0]
+default_feature = "Cancer mortality" if "Cancer mortality" in feature_map else list(feature_map.keys())[0]
 default_order = "Top 10 Highest"
 
 fig = go.Figure()
@@ -915,7 +1075,6 @@ fig.update_layout(
             active=default_index
         )
     ],
-    
 )
 fig.show()
 ```
@@ -933,24 +1092,13 @@ if name_col not in df.columns:
     df["country_name"] = df[iso_col]
     name_col = "country_name"
 
-feature_map = {
-    "Cancer Mortality": "cancer_mortality",
-    "Smoking": "smoking",
-    "Alcohol": "alcohol",
-    "Obesity": "obesity",
-    "Physical Inactivity": "inactivity",
-    "GDP per Capita": "gdp_per_capita",
-    "PM2.5": "pollution_pm25",
-    "Doctors per 10,000": "medical_doctors_per_10000",
-    "Life Expectancy": "life_expectancy"
-}
-feature_map = {k: v for k, v in feature_map.items() if v in df.columns}
+feature_map = make_feature_map(df, include_outcome=True)
 order_map = {
     "Top 10 Highest": ("desc", 10),
     "Bottom 10 Lowest": ("asc", 10)
 }
 
-def ranking_table(feature_name="Cancer Mortality", order_name="Top 10 Highest"):
+def ranking_table(feature_name="Cancer mortality", order_name="Top 10 Highest"):
     col = feature_map[feature_name]
     sort_dir, n_rows = order_map[order_name]
     temp = df[[name_col, iso_col, col]].dropna().copy()
@@ -961,7 +1109,7 @@ def ranking_table(feature_name="Cancer Mortality", order_name="Top 10 Highest"):
     temp.columns = ["Rank", "Country", "ISO-3", feature_name]
     return temp
 
-ranking_table("Cancer Mortality", "Top 10 Highest")
+ranking_table("Cancer mortality", "Top 10 Highest")
 ```
 :::
 
@@ -1121,20 +1269,28 @@ display(Image(filename="figures/exploratory_3d_scatter_plane.png"))
 
 ## Predictive Modeling
 
-### Modeling strategy
+The modeling section has two parts. **Part 1** keeps the original all-cancer mortality task, where the goal is to evaluate whether the broad country-level indicators explain variation in overall cancer mortality. **Part 2** extends the analysis to five cancer-type-specific outcomes. The second part is intentionally framed as exploratory association modeling because the cancer-type-specific WHO mortality outcomes are older than the 2014--2023 predictor window.
 
-To extend the exploratory analysis into the predictive stage of the project, I compared three regression models: a baseline **ordinary least squares linear regression**, a **random forest regressor**, and an **XGBoost regressor**. The same outcome and predictor set were used across models so that performance differences would reflect model flexibility rather than differences in inputs.
+### Part 1: Overall cancer mortality model
 
-The outcome variable was **cancer mortality**. The predictor set included smoking, obesity, alcohol consumption, physical inactivity, GDP per capita, PM2.5 exposure, medical doctor density, and life expectancy. For the linear model, GDP per capita, PM2.5 exposure, and doctor density were log-transformed to reduce skewness. The tree-based models were fit on the original scale because they do not require linearity or normally distributed predictors.
+#### Modeling strategy
+
+To extend the exploratory analysis into the predictive stage of the project, I first compared three regression models for overall cancer mortality: a baseline **ordinary least squares linear regression**, a **random forest regressor**, and an **XGBoost regressor**. The same outcome and predictor set were used across models so that performance differences would reflect model flexibility rather than differences in inputs.
+
+The outcome variable was **overall cancer mortality**. The predictor set included smoking, obesity, alcohol consumption, physical inactivity, GDP per capita, PM2.5 exposure, medical doctor density, and life expectancy. For the linear model, GDP per capita, PM2.5 exposure, and doctor density were log-transformed to reduce skewness. The tree-based models were fit on the original scale because they do not require linearity or normally distributed predictors.
 
 Model performance was assessed with **5-fold cross-validation** using three metrics: **\(R^2\)**, **RMSE**, and **MAE**. To provide a useful benchmark, a null model that predicts the mean cancer mortality was also included in the final comparison table.
 
 ```{python}
 #| echo: false
 from sklearn.dummy import DummyRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, ElasticNet, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold, cross_validate, RandomizedSearchCV, GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, SplineTransformer
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.inspection import permutation_importance
 from xgboost import XGBRegressor
 
 feature_cols = [
@@ -1189,7 +1345,7 @@ X_linear = linear_df[
 ]
 ```
 
-### Baseline models
+#### Baseline models
 
 The linear regression model serves as an interpretable baseline, while the initial random forest model provides a constrained nonlinear benchmark with shallow trees and minimum node-size restrictions to reduce overfitting.
 
@@ -1227,7 +1383,7 @@ baseline_table
 
 These baseline results provide a reference point for judging whether more flexible models meaningfully improve prediction or mainly increase variance.
 
-### Random forest tuning
+#### Random forest tuning
 
 Random forest hyperparameters were tuned in two stages. A small **randomized search** was first used to explore a broad but manageable parameter space. A more focused **grid search** was then conducted around the better-performing region suggested by the randomized search. This two-stage strategy is more efficient than a large exhaustive grid while still allowing the main bias--variance trade-offs to be explored.
 
@@ -1276,7 +1432,7 @@ rf_param_grid = {
     "max_depth": [3, 4, 5], 
     "min_samples_split": [5, 10],
     "min_samples_leaf": [4, 6, 8],
-    "max_features": [0.5, "sqrt"], #these two dominate top10.
+    "max_features": [0.5, "sqrt"],
 }
 
 rf_grid_search = GridSearchCV(
@@ -1284,7 +1440,7 @@ rf_grid_search = GridSearchCV(
     param_grid=rf_param_grid,
     scoring="r2",
     cv=cv,
-    n_jobs=1, # I change pretty much all n_job to 1 no parallel since it having memory error while rendering.
+    n_jobs=1,
     return_train_score=True,
 )
 rf_grid_search.fit(X_tree, y)
@@ -1325,7 +1481,7 @@ Increasing the number of trees beyond 100 did not improve predictive performance
 
 Instead, hyperparameters controlling tree complexity and feature subsampling (e.g., maximum depth, minimum samples per leaf, and max_features) had a larger impact on generalization performance, likely by reducing correlation between trees and preventing overfitting.
 
-### XGBoost modeling and tuning
+#### XGBoost modeling and tuning
 
 XGBoost was included as a second tree-based model with a different inductive bias. Unlike random forests, which average many independently grown trees, XGBoost builds trees sequentially so that each new tree attempts to correct the errors of the previous ensemble. This can improve performance when the underlying structure is complex, but it also makes the method more prone to overfitting on small or noisy datasets.
 
@@ -1340,7 +1496,7 @@ xgb_default = XGBRegressor(
     colsample_bytree=0.8,
     reg_lambda=1,
     random_state=42,
-    n_jobs=1, # I change pretty much all n_job to 1 no parallel since it having memory error while rendering.
+    n_jobs=1,
 )
 
 xgb_default_cv = cross_validate(
@@ -1357,7 +1513,6 @@ xgb_default_table
 
 The default XGBoost model shows clear overfitting: its training \(R^2\) is high, but its cross-validated \(R^2\) remains much lower. This indicates that the model captured patterns specific to the training folds more strongly than patterns that generalize across countries.
 
-
 A focused grid search was used for XGBoost rather than a very large search space. Given the small and noisy dataset, the search emphasized shallower trees, moderate numbers of boosting rounds, subsampling, and stronger regularization.
 
 ```{python}
@@ -1365,7 +1520,7 @@ A focused grid search was used for XGBoost rather than a very large search space
 xgb = XGBRegressor(
     objective="reg:squarederror",
     random_state=42,
-    n_jobs=1, # I change pretty much all n_job to 1 no parallel since it having memory error while rendering.
+    n_jobs=1,
 )
 
 xgb_param_grid = {
@@ -1418,7 +1573,7 @@ xgb_best_params_table = pd.DataFrame([xgb_grid_search.best_params_])
 xgb_best_params_table
 ```
 
-### Final model comparison
+#### Final model comparison for overall cancer mortality
 
 The final comparison table summarizes cross-validated performance across the null baseline, linear regression, constrained and tuned random forest models, and default and tuned XGBoost models.
 
@@ -1439,7 +1594,7 @@ comparison_table = comparison_table[[col for col in ["Model", "Train R^2", "CV R
 comparison_table
 ```
 
-### Model results and interpretation
+#### Overall cancer model interpretation
 
 The predictive performance of all models is summarized in the final comparison table. Overall, the non-null models performed better than the null baseline, but none achieved strong predictive accuracy. The cross-validated **\(R^2\)** values remained low across all approaches, suggesting that the predictors contain some signal but not enough for highly accurate country-level prediction.
 
@@ -1451,17 +1606,404 @@ After hyperparameter tuning, both random forest and XGBoost models showed improv
 
 Among all models, the tuned random forest achieved the best overall performance, although the improvement over simpler models was small. This suggests that while some nonlinear structure may exist, it is weak and difficult to exploit reliably given the available data.
 
+### Part 2: Cancer-type-specific exploratory models
+
+The second modeling stage asks whether different cancer types show stronger associations with smaller, mechanism-informed predictor sets. Instead of fitting one large model with every available variable, each cancer-specific outcome is paired with three to four predictors that are biologically or contextually plausible for that cancer type. This avoids unnecessary feature expansion in a dataset with fewer than 200 countries.
+
+The cancer-type outcomes use the most recent WHO observation available for each country, which is older than the 2014--2023 predictor window for many countries. For that reason, these models should be interpreted as **exploratory cross-country association models**, not causal models and not real forward-looking prediction systems.
+
+I do not use stepwise AIC feature selection here. AIC is most natural for likelihood-based parametric models and is not directly comparable across random forests, spline-based models, and regularized regressions. Stepwise selection can also be unstable in small, correlated country-level datasets. Instead, the feature sets below are mechanism-informed, while Elastic Net provides a regularized linear model that can shrink weak predictors automatically.
+
+```{python}
+#| echo: false
+#| label: tbl-cancer-specific-feature-sets
+#| tbl-cap: "Mechanism-informed predictor sets used for the cancer-type-specific exploratory models."
+# Cancer-specific outcomes and their mechanism-informed predictor sets.
+cancer_specific_tasks = {
+    "breast_cancer_mortality": {
+        "features": ["cervical_screening_rate", "obesity", "alcohol", "gdp_per_capita"],
+        "rationale": "screening/health-system access proxy, metabolic risk, alcohol exposure, and development",
+    },
+    "mouth_oropharynx_cancer_mortality": {
+        "features": ["smoking", "alcohol", "gdp_per_capita", "medical_doctors_per_10000"],
+        "rationale": "tobacco and alcohol exposure with development/reporting and healthcare capacity controls",
+    },
+    "oesophagus_cancer_mortality": {
+        "features": ["smoking", "alcohol", "obesity", "gdp_per_capita"],
+        "rationale": "tobacco, alcohol, metabolic risk, and development context",
+    },
+    "colorectal_cancer_mortality": {
+        "features": ["obesity", "inactivity", "alcohol", "gdp_per_capita"],
+        "rationale": "metabolic/lifestyle risk and development-related diet/screening context",
+    },
+    "liver_cancer_mortality": {
+        "features": ["hepatitis_b_prevalence", "alcohol", "obesity", "gdp_per_capita"],
+        "rationale": "infection-related risk, alcohol exposure, metabolic risk, and development context",
+    },
+}
+
+task_table = pd.DataFrame(
+    [
+        {
+            "Cancer outcome": label_map.get(target, target),
+            "Predictors used": ", ".join(label_map.get(f, f) for f in spec["features"]),
+            "Rationale": spec["rationale"],
+        }
+        for target, spec in cancer_specific_tasks.items()
+    ]
+)
+task_table
+```
+
+#### Candidate model families
+
+For each cancer-specific outcome, four model families are compared under 5-fold cross-validation:
+
+1. **Linear regression**, used as an untuned baseline.
+2. **Elastic Net**, which tunes the penalty strength and the ridge/lasso mixture to stabilize linear estimation under correlated predictors.
+3. **Additive spline ridge model**, used as a GAM-like model. It applies spline basis functions to each predictor and then fits a regularized additive regression. This captures smooth nonlinear relationships without allowing unrestricted interactions.
+4. **Random forest**, tuned with a small local grid emphasizing shallow trees and larger leaf sizes. This provides a nonlinear interaction-capable benchmark while limiting variance.
+
+Because several cancer-type mortality outcomes are strongly right-skewed, linear, Elastic Net, and additive spline models are fit through a log-target transformation using `log1p`. Performance metrics are still computed on the original mortality scale after inverse transformation. Random forests are fit on the raw outcome scale.
+
+```{python}
+#| echo: false
+#| label: tbl-cancer-model-comparison
+#| tbl-cap: "Cross-validated performance of candidate model families for each cancer-type-specific mortality outcome."
+# Helper functions for cancer-specific model comparison
+
+def make_log_target_model(regressor):
+    return TransformedTargetRegressor(
+        regressor=regressor,
+        func=np.log1p,
+        inverse_func=np.expm1,
+    )
+
+
+def evaluate_estimator(estimator, X, y, model_name, target_label, cv):
+    cv_results = cross_validate(
+        estimator,
+        X,
+        y,
+        cv=cv,
+        scoring=scoring,
+        return_train_score=True,
+        n_jobs=1,
+    )
+    return {
+        "Cancer outcome": target_label,
+        "Model": model_name,
+        "Train R^2": cv_results["train_r2"].mean(),
+        "CV R^2": cv_results["test_r2"].mean(),
+        "CV R^2 SD": cv_results["test_r2"].std(),
+        "CV RMSE": -cv_results["test_rmse"].mean(),
+        "CV MAE": -cv_results["test_mae"].mean(),
+    }
+
+
+def clean_params(params):
+    cleaned = {}
+    for key, value in params.items():
+        key = key.replace("regressor__", "").replace("model__", "").replace("ridge__", "").replace("spline__", "")
+        cleaned[key] = value
+    return cleaned
+
+
+elastic_net_grid = {
+    "regressor__model__alpha": [0.01, 0.1, 1.0, 10.0],
+    "regressor__model__l1_ratio": [0.2, 0.5, 0.8],
+}
+
+spline_grid = {
+    "regressor__spline__n_knots": [4, 5, 6],
+    "regressor__ridge__alpha": [0.1, 1.0, 10.0, 100.0],
+}
+
+rf_cancer_grid = {
+    "n_estimators": [100, 200],
+    "max_depth": [2, 3, 4, 5],
+    "min_samples_leaf": [3, 5, 8],
+    "max_features": ["sqrt", 1.0],
+}
+
+cancer_model_rows = []
+best_models_by_cancer = {}
+best_params_rows = []
+
+for target, spec in cancer_specific_tasks.items():
+    feature_list = spec["features"]
+    target_label = label_map.get(target, target)
+
+    # Use only countries with observed cancer-type target values. Predictor values come
+    # from the cleaned/imputed dataframe, but the target itself is not imputed.
+    target_obs = latest_dfs[target][["country", target]].dropna()
+    model_data = target_obs.merge(df[["country"] + feature_list], on="country", how="left")
+    model_data = model_data.apply(lambda col: pd.to_numeric(col, errors="coerce") if col.name != "country" else col)
+    model_data = model_data.dropna(subset=[target] + feature_list)
+
+    X_cancer = model_data[feature_list]
+    y_cancer = model_data[target]
+
+    # 1. Linear baseline: no tuning.
+    linear_model = make_log_target_model(
+        Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", LinearRegression()),
+        ])
+    )
+    linear_model.fit(X_cancer, y_cancer)
+    cancer_model_rows.append(evaluate_estimator(linear_model, X_cancer, y_cancer, "Linear regression", target_label, cv))
+
+    # 2. Elastic Net: tune penalty strength and lasso/ridge mix.
+    elastic_model = make_log_target_model(
+        Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", ElasticNet(max_iter=10000, random_state=42)),
+        ])
+    )
+    elastic_search = GridSearchCV(
+        elastic_model,
+        elastic_net_grid,
+        scoring="r2",
+        cv=cv,
+        n_jobs=1,
+        return_train_score=True,
+    )
+    elastic_search.fit(X_cancer, y_cancer)
+    cancer_model_rows.append(evaluate_estimator(elastic_search.best_estimator_, X_cancer, y_cancer, "Elastic Net (tuned)", target_label, cv))
+    best_params_rows.append({
+        "Cancer outcome": target_label,
+        "Model": "Elastic Net (tuned)",
+        "Best parameters": clean_params(elastic_search.best_params_),
+    })
+
+    # 3. GAM-like additive spline ridge: tune spline complexity and shrinkage.
+    spline_model = make_log_target_model(
+        Pipeline([
+            ("spline", SplineTransformer(degree=3, include_bias=False, extrapolation="constant")),
+            ("scaler", StandardScaler()),
+            ("ridge", Ridge()),
+        ])
+    )
+    spline_search = GridSearchCV(
+        spline_model,
+        spline_grid,
+        scoring="r2",
+        cv=cv,
+        n_jobs=1,
+        return_train_score=True,
+    )
+    spline_search.fit(X_cancer, y_cancer)
+    cancer_model_rows.append(evaluate_estimator(spline_search.best_estimator_, X_cancer, y_cancer, "Additive spline ridge (tuned)", target_label, cv))
+    best_params_rows.append({
+        "Cancer outcome": target_label,
+        "Model": "Additive spline ridge (tuned)",
+        "Best parameters": clean_params(spline_search.best_params_),
+    })
+
+    # 4. Random forest: small local grid favoring simpler trees.
+    rf_cancer = RandomForestRegressor(random_state=42, n_jobs=1)
+    rf_search = GridSearchCV(
+        rf_cancer,
+        rf_cancer_grid,
+        scoring="r2",
+        cv=cv,
+        n_jobs=1,
+        return_train_score=True,
+    )
+    rf_search.fit(X_cancer, y_cancer)
+    cancer_model_rows.append(evaluate_estimator(rf_search.best_estimator_, X_cancer, y_cancer, "Random forest (tuned)", target_label, cv))
+    best_params_rows.append({
+        "Cancer outcome": target_label,
+        "Model": "Random forest (tuned)",
+        "Best parameters": clean_params(rf_search.best_params_),
+    })
+
+    # Store the best model by CV R^2 for later interpretation.
+    current_rows = [row for row in cancer_model_rows if row["Cancer outcome"] == target_label]
+    best_row = max(current_rows, key=lambda row: row["CV R^2"])
+    model_lookup = {
+        "Linear regression": linear_model,
+        "Elastic Net (tuned)": elastic_search.best_estimator_,
+        "Additive spline ridge (tuned)": spline_search.best_estimator_,
+        "Random forest (tuned)": rf_search.best_estimator_,
+    }
+    best_models_by_cancer[target_label] = {
+        "model": model_lookup[best_row["Model"]],
+        "model_name": best_row["Model"],
+        "features": feature_list,
+        "X": X_cancer,
+        "y": y_cancer,
+        "n_countries": len(model_data),
+    }
+
+cancer_model_comparison = pd.DataFrame(cancer_model_rows)
+cancer_model_comparison = cancer_model_comparison.round(4)
+cancer_model_comparison
+```
+
+The cancer-type comparison shows a clearer pattern than the single all-cancer model. The tuned random forest is selected most often, suggesting that nonlinear relationships and interactions are useful for these country-level cancer outcomes. However, the strength of prediction differs substantially by cancer type. Colon and rectum cancer and liver cancer show stronger cross-validated performance than breast, oesophagus, and mouth/oropharynx cancer, which suggests that some cancer outcomes align more clearly with the measured country-level risk profiles than others. This supports the decision to model cancer types separately: aggregating all cancers together mixes distinct mechanisms and can blur signals that are more visible for individual cancer outcomes.
+
+#### Best model configurations
+
+The table below reports the tuned configurations for Elastic Net, the additive spline model, and random forest. The linear regression baseline is not tuned.
+
+```{python}
+#| echo: false
+#| label: tbl-cancer-best-parameters
+#| tbl-cap: "Best tuned hyperparameters for the cancer-type-specific model comparison."
+best_params_table = pd.DataFrame(best_params_rows)
+best_params_table
+```
+
+#### Best model by cancer type
+
+```{python}
+#| echo: false
+#| label: tbl-cancer-best-models
+#| tbl-cap: "Best-performing model for each cancer-type-specific mortality outcome under 5-fold cross-validation."
+best_by_cancer = (
+    cancer_model_comparison
+    .sort_values(["Cancer outcome", "CV R^2"], ascending=[True, False])
+    .groupby("Cancer outcome", as_index=False)
+    .head(1)
+    .copy()
+)
+
+best_by_cancer["Countries used"] = best_by_cancer["Cancer outcome"].map(
+    {label: info["n_countries"] for label, info in best_models_by_cancer.items()}
+)
+
+best_by_cancer = best_by_cancer[[
+    "Cancer outcome",
+    "Model",
+    "Countries used",
+    "Train R^2",
+    "CV R^2",
+    "CV R^2 SD",
+    "CV RMSE",
+    "CV MAE",
+]].round(4)
+
+best_by_cancer
+```
+
+The best-model summary reinforces that model performance is not uniform across cancer outcomes. Random forests are useful across the five tasks, but the results should not be interpreted as meaning that every cancer type is highly predictable. Colon and rectum cancer is the clearest case where the measured features capture a stronger country-level signal, while liver cancer also shows meaningful but more moderate predictive structure. Breast cancer remains difficult to model in this dataset, even when screening-related and metabolic predictors are included. This likely reflects missing variables such as reproductive history, genetic risk, detailed screening quality, and treatment access, as well as the temporal mismatch between cancer-type outcomes and recent predictors.
+
+#### Model-agnostic feature importance for selected models
+
+For each cancer type, I interpret the selected best model using permutation importance. This keeps the interpretation consistent across linear, spline, and random forest models. A larger positive value means that randomly permuting that predictor increases RMSE more strongly, so the fitted model relied more heavily on that feature. These values rank model dependence, not direction of association or causal effect.
+
+```{python}
+#| echo: false
+#| output: false
+importance_rows = []
+
+for cancer_label, info in best_models_by_cancer.items():
+    estimator = info["model"]
+    X_imp = info["X"]
+    y_imp = info["y"]
+    result = permutation_importance(
+        estimator,
+        X_imp,
+        y_imp,
+        scoring="neg_root_mean_squared_error",
+        n_repeats=20,
+        random_state=42,
+        n_jobs=1,
+    )
+    for feature, mean_importance, std_importance in zip(info["features"], result.importances_mean, result.importances_std):
+        importance_rows.append({
+            "Cancer outcome": cancer_label,
+            "Selected model": info["model_name"],
+            "Feature": label_map.get(feature, feature),
+            "Feature short": {
+                "cervical_screening_rate": "Screening rate",
+                "hepatitis_b_prevalence": "Hepatitis B",
+                "gdp_per_capita": "GDP per capita",
+                "medical_doctors_per_10000": "Doctors per 10k",
+                "pollution_pm25": "PM2.5",
+                "urban_population_pct": "Urban share",
+                "inactivity": "Inactivity",
+                "obesity": "Obesity",
+                "alcohol": "Alcohol",
+                "smoking": "Smoking",
+            }.get(feature, label_map.get(feature, feature)),
+            "Permutation importance (RMSE increase)": mean_importance,
+            "Importance SD": std_importance,
+        })
+
+feature_importance_table = (
+    pd.DataFrame(importance_rows)
+    .sort_values(["Cancer outcome", "Permutation importance (RMSE increase)"], ascending=[True, False])
+    .round(4)
+)
+```
+
+```{python}
+#| echo: false
+#| label: fig-cancer-feature-importance
+#| fig-cap: "Permutation importance for the selected cancer-type-specific models. Each bar shows the increase in RMSE after the feature is randomly permuted; larger bars indicate that the fitted model relied more strongly on that feature."
+#| fig-width: 11
+#| fig-height: 9
+
+plot_order = [
+    "Breast cancer mortality",
+    "Colon and rectum cancer mortality",
+    "Liver cancer mortality",
+    "Mouth/oropharynx cancer mortality",
+    "Oesophagus cancer mortality",
+]
+
+fig, axes = plt.subplots(3, 2, figsize=(11, 9))
+axes = axes.reshape(-1)
+
+for ax, cancer_label in zip(axes, plot_order):
+    temp = feature_importance_table[feature_importance_table["Cancer outcome"] == cancer_label].copy()
+    temp = temp.sort_values("Permutation importance (RMSE increase)", ascending=True)
+
+    y_pos = np.arange(len(temp))
+    ax.barh(
+        y_pos,
+        temp["Permutation importance (RMSE increase)"],
+        xerr=temp["Importance SD"],
+        alpha=0.85,
+    )
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(temp["Feature short"])
+    ax.axvline(0, linewidth=0.8)
+    ax.set_title(cancer_label)
+    ax.set_xlabel("RMSE increase after permutation")
+
+for ax in axes[len(plot_order):]:
+    ax.axis("off")
+
+plt.tight_layout()
+plt.show()
+```
+
+#### Cancer-specific modeling interpretation
+
+This extension changes the modeling question from "Can broad country-level indicators predict overall cancer mortality?" to "Do different cancer-specific mortality outcomes align with different country-level risk profiles?" This is a more realistic framing because cancer mortality is not one homogeneous process. Liver cancer, colorectal cancer, breast cancer, oesophagus cancer, and mouth/oropharynx cancer have different risk-factor structures, so the relevant predictors should not be identical across outcomes.
+
+The cancer-specific models show that separating cancer types can reveal stronger structure than the aggregate all-cancer model. Colon and rectum cancer and liver cancer show the clearest improvement, suggesting that the selected country-level predictors align better with these outcomes. In contrast, breast cancer and oesophagus cancer remain more difficult to model, which suggests that important drivers are missing or not well represented by the available country-level variables.
+
+The permutation-importance figure provides a descriptive ranking of model reliance. For liver cancer, hepatitis B prevalence is the strongest feature, which is consistent with an infection-related risk mechanism. For colon and rectum cancer, GDP per capita is dominant, with alcohol, physical inactivity, and obesity also contributing; this likely reflects a mixture of development, lifestyle, diet, screening, and reporting differences. For breast cancer, the screening-related variable is ranked highest, but the model's weak cross-validated performance means this should be interpreted cautiously as model reliance on a health-system proxy rather than evidence that screening has a simple directional effect on mortality.
+
+These importance rankings do not provide coefficients. A high importance value means that destroying the information in that feature worsens prediction, not that increasing the feature necessarily increases or decreases cancer mortality. Because many country-level indicators are correlated, variables such as GDP, doctors, and screening may also share explanatory information. The cancer-specific results are therefore best interpreted as exploratory evidence that some mechanisms are more visible for certain cancer types than in the aggregate all-cancer outcome.
+
 ## Conclusions and limitations
 
-This analysis constructed a cross-country dataset linking cancer mortality to lifestyle, environmental, socioeconomic, demographic, and healthcare indicators using data from the WHO and World Bank APIs. While exploratory analysis revealed substantial variation across countries, the predictive modeling results indicate that these variables provide only limited explanatory power for cancer mortality.
+This analysis constructed a cross-country dataset linking cancer mortality to lifestyle, environmental, socioeconomic, demographic, healthcare, screening, infection, and urbanization indicators using data from the WHO and World Bank APIs. The results show that broad country-level indicators contain some signal, but that signal is limited and strongly affected by aggregation, missingness, and temporal mismatch.
 
-Across all models, predictive performance remained limited. The non-null models improved over the mean-only null model, and the tuned random forest performed best overall, but the cross-validated **\(R^2\)** values were still low. This suggests that the selected predictors capture some country-level signal, but the relationship between these indicators and cancer mortality remains weak and noisy.
+For the original all-cancer mortality outcome, predictive performance remained modest. The tuned random forest performed best overall, but the improvement over simpler models was small, indicating that model flexibility alone cannot overcome the weak and noisy relationship between the available predictors and aggregate cancer mortality. This supports the interpretation that all-cancer mortality combines many different disease processes into a single outcome, which makes the signal difficult to model using a small set of national indicators.
 
-The modeling results also highlight an important bias–variance trade-off. More flexible models such as random forests and XGBoost were able to capture some nonlinear structure, but they also showed larger training-to-validation gaps when the model was too flexible. Hyperparameter tuning helped by enforcing simpler model structures, which reduced overfitting and modestly improved generalization, but it did not turn the problem into a high-accuracy prediction task.
+The cancer-type-specific extension provides a clearer result. Random forests were selected as the best-performing model family across the five cancer-specific tasks, suggesting that nonlinear relationships and interactions are useful in this setting. More importantly, performance varied substantially by cancer type. Colon and rectum cancer and liver cancer showed stronger cross-validated performance, while breast, oesophagus, and mouth/oropharynx cancer were harder to predict. This supports the idea that separate cancer-type models can recover patterns that are blurred in the aggregate all-cancer outcome.
 
-These findings indicate that the main limitation is not the choice of model, but the data and problem formulation itself. Cancer mortality is influenced by complex and long-term processes, including historical exposure, age structure, healthcare systems, screening practices, and reporting differences. Aggregating these effects into a small set of country-level indicators likely obscures important variation and introduces substantial irreducible noise.
+Feature-importance results also aligned with some expected mechanisms. Hepatitis B prevalence was most important for liver cancer, while colorectal cancer relied strongly on GDP and lifestyle-related variables. Screening-related information was important for breast cancer, although the weak predictive performance for that outcome means the result should be interpreted as model dependence on a health-system proxy rather than a causal screening effect. Across several outcomes, GDP remained highly important, likely because it captures multiple country-level differences at once, including healthcare access, reporting quality, screening systems, diet, and development.
 
-Several data limitations further constrain the analysis. The WHO API contains substantial missing data across countries and years, which required restricting the dataset to the most recent available observations. This reduced the effective sample size and removed temporal information. In addition, some key variables were unavailable or inconsistently reported, leading to the use of proxies such as physicians per population for healthcare capacity. Median imputation was used to handle missing values, which simplifies the data structure but may further reduce variability and signal.
+These findings should not be interpreted causally. The cancer-type-specific mortality outcomes available through the WHO API were often older than the 2014--2023 predictor window, so the second modeling stage is exploratory rather than a forward-looking prediction system. In addition, the analysis is ecological: each row represents a country, not an individual patient. Relationships observed at the country level may reflect confounding by age structure, healthcare access, screening, reporting quality, or socioeconomic development.
 
-Overall, the results suggest that predicting cancer mortality using a small set of aggregated country-level indicators is inherently challenging. The models show that there is some observable signal, but the signal is weak relative to the noise introduced by aggregation, missing temporal information, and unmeasured factors. As a result, this analysis is better interpreted as a descriptive comparison of broad patterns rather than a precise predictive or causal model.
+Several data limitations further constrain the analysis. WHO indicators had uneven country-year coverage, which required using latest available observations and median imputation for predictors. Some important cancer drivers, such as genetic risk, detailed dietary intake, cancer stage at diagnosis, treatment quality, screening follow-up, and historical exposure timing, were unavailable or only crudely proxied. As a result, the models are best viewed as exploratory tools for comparing broad cross-country patterns, not as precise predictive or causal models.
 
+Overall, the project suggests that country-level cancer mortality is difficult to model as a single aggregate outcome. A cancer-type-specific approach is more informative because different cancers are associated with different risk profiles, but even this approach remains limited by data availability and unmeasured confounding. The strongest conclusion is therefore structural: modeling cancer types separately improves interpretability and reveals more meaningful patterns, but high-accuracy prediction would require more temporally aligned, cancer-specific, and clinically detailed data.
